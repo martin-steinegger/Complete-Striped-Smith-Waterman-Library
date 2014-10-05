@@ -1,6 +1,6 @@
 set(alignment_source_files
 kseq.h
-ssw.c
+ssw.cpp
 ssw.h
 ssw_cpp.cpp
 ssw_cpp.h
