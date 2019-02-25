@@ -213,7 +213,7 @@ int main (int argc, char * const argv[]) {
 	float cpu_time;
 	gzFile read_fp, ref_fp;
 	kseq_t *read_seq, *ref_seq;
-	int32_t l, m, k, match = 2, mismatch = 2, gap_open = 3, gap_extension = 1, path = 0, reverse = 0, n = 5, sam = 0, protein = 0, header = 0, s1 = 67108864, s2 = 128, filter = 0;
+	int32_t l, m, k, match = 2, mismatch = 2, findallbest = 0, gap_open = 3, gap_extension = 1, path = 0, reverse = 0, n = 5, sam = 0, protein = 0, header = 0, s1 = 67108864, s2 = 128, filter = 0;
 	int8_t* mata = (int8_t*)calloc(25, sizeof(int8_t));
 	const int8_t* mat = mata;
 	char mat_name[16];
@@ -277,14 +277,15 @@ int main (int argc, char * const argv[]) {
 	int8_t* table = nt_table;
 
 	// Parse command line.
-	while ((l = getopt(argc, argv, "m:x:o:e:a:f:pcrsh")) >= 0) {
+	while ((l = getopt(argc, argv, "m:x:o:e:a:f:bpcrsh")) >= 0) {
 		switch (l) {
 			case 'm': match = atoi(optarg); break;
 			case 'x': mismatch = atoi(optarg); break;
 			case 'o': gap_open = atoi(optarg); break;
 			case 'e': gap_extension = atoi(optarg); break;
 			case 'a': strcpy(mat_name, optarg); break;
-			case 'f': filter = atoi(optarg); break;
+            case 'b': findallbest = 1; break;
+            case 'f': filter = atoi(optarg); break;
 			case 'p': protein = 1; break;
 			case 'c': path = 1; break;
 			case 'r': reverse = 1; break;
@@ -304,8 +305,9 @@ int main (int argc, char * const argv[]) {
 		fprintf(stderr, "\t-a FILE\tFILE is either the Blosum or Pam weight matrix. [default: Blosum50]\n");
 		fprintf(stderr, "\t-c\tReturn the alignment path.\n");
 		fprintf(stderr, "\t-f N\tN is a positive integer. Only output the alignments with the Smith-Waterman score >= N.\n");
-		fprintf(stderr, "\t-r\tThe best alignment will be picked between the original read alignment and the reverse complement read alignment.\n");
-		fprintf(stderr, "\t-s\tOutput in SAM format. [default: no header]\n");
+        fprintf(stderr, "\t-b\tReturn all alignments with best Smith-Waterman score.\n");
+        fprintf(stderr, "\t-r\tThe best alignment will be picked between the original read alignment and the reverse complement read alignment.\n");
+        fprintf(stderr, "\t-s\tOutput in SAM format. [default: no header]\n");
 		fprintf(stderr, "\t-h\tIf -s is used, include header in SAM output.\n\n");
 		return 1;
 	}
@@ -423,18 +425,42 @@ int main (int argc, char * const argv[]) {
 			}
 			for (m = 0; m < refLen; ++m) ref_num[m] = table[(int)ref_seq->seq.s[m]];
 			if (path == 1) flag = 2;
-			result = ssw_align (p, ref_num, refLen, gap_open, gap_extension, flag, filter, 0, maskLen);
-			if (reverse == 1 && protein == 0)
-				result_rc = ssw_align(p_rc, ref_num, refLen, gap_open, gap_extension, flag, filter, 0, maskLen);
-			if (result_rc && result_rc->score1 > result->score1 && result_rc->score1 >= filter) {
-				if (sam) ssw_write (result_rc, ref_seq, read_seq, read_rc, table, 1, 1);
-				else ssw_write (result_rc, ref_seq, read_seq, read_rc, table, 1, 0);
-			}else if (result && result->score1 >= filter){
-				if (sam) ssw_write(result, ref_seq, read_seq, read_seq->seq.s, table, 0, 1);
-				else ssw_write(result, ref_seq, read_seq, read_seq->seq.s, table, 0, 0);
-			} else if (! result) return 1;
-			if (result_rc) align_destroy(result_rc);
-			align_destroy(result);
+
+            uint16_t prevBestScore = UINT16_MAX;
+            bool hasSameScore;
+            bool isfirstalignment = true;
+            do {
+                result = ssw_align (p, ref_num, refLen, gap_open, gap_extension, flag, filter, 0, maskLen);
+                if (reverse == 1 && protein == 0)
+                    result_rc = ssw_align(p_rc, ref_num, refLen, gap_open, gap_extension, flag, filter, 0, maskLen);
+                if (result_rc && result_rc->score1 > result->score1 && result_rc->score1 >= filter) {
+                    if (sam) ssw_write (result_rc, ref_seq, read_seq, read_rc, table, 1, 1);
+                    else ssw_write (result_rc, ref_seq, read_seq, read_rc, table, 1, 0);
+                }else if (result && result->score1 >= filter){
+                    if (sam) ssw_write(result, ref_seq, read_seq, read_seq->seq.s, table, 0, 1);
+                    else ssw_write(result, ref_seq, read_seq, read_seq->seq.s, table, 0, 0);
+                } else if (! result) return 1;
+                if(prevBestScore != UINT16_MAX){
+                    isfirstalignment = false;
+                }
+                // mask region and align again,
+                if(result_rc && result_rc->score1 > result->score1){
+                    hasSameScore = (result_rc->score1 == prevBestScore);
+                    prevBestScore = result_rc->score1;
+                    for(uint32_t pos = result_rc->ref_begin1; pos < result_rc->ref_end1; pos++ ){
+                        ref_num[pos] = (n == 24) ? 23 : 4;
+                    }
+                }else{
+                    hasSameScore = (result->score1 == prevBestScore);
+                    prevBestScore = result->score1;
+                    for(uint32_t pos = result->ref_begin1; pos < result->ref_end1; pos++ ){
+                        ref_num[pos] = (n == 24) ? 23 : 4;
+                    }
+                }
+
+                if (result_rc) align_destroy(result_rc);
+                align_destroy(result);
+            }while(findallbest == 1 && (hasSameScore == true || isfirstalignment == true) && prevBestScore >= filter );
 		}
 
 		if(p_rc) init_destroy(p_rc);
