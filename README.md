@@ -1,4 +1,6 @@
-#SSW Library: An SIMD Smith-Waterman C/C++/Python Library for Use in Genomic Applications
+#  SSW Library: An SIMD Smith-Waterman C/C++/Python Library for Use in Genomic Applications
+
+Simple extention of the SSW library to show several best alignments for each reference + cmake support. 
 
 License: MIT
 
